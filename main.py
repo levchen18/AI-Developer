@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Form
+import shutil
+
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from PIL import Image
 import uuid
 import os
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 import torch
 
 app = FastAPI()
@@ -13,6 +15,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 pipe = None
+txt2img_pipe = None
+img2img_pipe = None
 
 POSITIVE_PROMPT = (
     "pixel art, knitting pattern, intarsia knitting, "
@@ -29,6 +33,29 @@ def get_pipe():
         ).to(device)
     return pipe
 
+def get_txt2img_pipe():
+    global txt2img_pipe
+    if txt2img_pipe is None:
+        txt2img_pipe = StableDiffusionPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            torch_dtype=torch.float16
+            if device == "cuda"
+            else torch.float32
+        ).to(device)
+    return txt2img_pipe
+
+
+def get_img2img_pipe():
+    global img2img_pipe
+    if img2img_pipe is None:
+        img2img_pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            torch_dtype=torch.float16
+            if device == "cuda"
+            else torch.float32
+        ).to(device)
+    return img2img_pipe
+
 def generate_image(prompt: str, path: str):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
     negative_prompt = (
@@ -37,7 +64,7 @@ def generate_image(prompt: str, path: str):
     )
     try:
         with torch.inference_mode():
-            result = get_pipe()(
+            result = get_txt2img_pipe()(
                 prompt=full_prompt,
                 negative_prompt=negative_prompt,
                 guidance_scale=8,
@@ -47,6 +74,35 @@ def generate_image(prompt: str, path: str):
         image.save(path)
     except Exception as e:
         print("IMAGE GENERATION ERROR:", e)
+        raise
+
+def generate_from_image(
+    input_image_path: str,
+    prompt: str,
+    output_path: str,
+    strength: float = 0.7
+):
+    full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
+    negative_prompt = (
+        "photorealistic, blurry, text, watermark, "
+        "high detail, realistic shading, noisy background"
+    )
+    try:
+        init_image = Image.open(input_image_path).convert("RGB")
+        init_image = init_image.resize((512, 512))
+        with torch.inference_mode():
+            result = get_img2img_pipe()(
+                prompt=full_prompt,
+                image=init_image,
+                strength=strength,
+                guidance_scale=8,
+                num_inference_steps=30,
+                negative_prompt=negative_prompt
+            )
+            image = result.images[0]
+        image.save(output_path)
+    except Exception as e:
+        print("IMAGE TO IMAGE ERROR:", e)
         raise
 
 def process_image(
@@ -69,32 +125,31 @@ def home():
     <html>
         <body style="text-align:center;font-family:Arial;padding:40px;">
             <h2>Knitting Image Generator</h2>
-            <form action="/generate" method="post">
+            <form action="/generate" method="post" enctype="multipart/form-data">
+                <label>Mode</label>
+                <br>
+                <select name="mode">
+                    <option value="txt2img">Text → Image</option>
+                    <option value="img2img">Image → Image</option>
+                </select>
+                <br><br>
                 <input
                     name="prompt"
                     style="width:350px;padding:8px;"
                     placeholder="Enter prompt"
                 />
                 <br><br>
+                <label>Upload Image (only for img2img)</label>
+                <br>
+                <input type="file" name="source_image">
+                <br><br>
                 <label>Stitch Resolution</label>
                 <br>
-                <input
-                    type="range"
-                    min="16"
-                    max="64"
-                    value="32"
-                    name="stitch_size"
-                />
+                <input type="range" min="16" max="64" value="32" name="stitch_size"/>
                 <br><br>
                 <label>Color Count</label>
                 <br>
-                <input
-                    type="range"
-                    min="2"
-                    max="8"
-                    value="4"
-                    name="color_count"
-                />
+                <input type="range" min="2" max="8" value="4" name="color_count"/>
                 <br><br>
                 <label>Output Size</label>
                 <br>
@@ -104,29 +159,47 @@ def home():
                     <option value="256">256px</option>
                 </select>
                 <br><br>
-                <button type="submit">
-                    Generate
-                </button>
+                <label>Strength (img2img only)</label>
+                <br>
+                <input type="range" min="0.1" max="1.0" step="0.1" value="0.7" name="strength"/>
+                <br><br>
+                <button type="submit">Generate</button>
             </form>
         </body>
     </html>
     """
 
 @app.post("/generate", response_class=HTMLResponse)
-def generate(
+async def generate(
     prompt: str = Form(...),
+    mode: str = Form("txt2img"),
+    source_image: UploadFile = File(None),
     stitch_size: int = Form(32),
     color_count: int = Form(4),
-    final_size: int = Form(192)
+    final_size: int = Form(192),
+    strength: float = Form(0.7)
 ):
-
     try:
         file_id = str(uuid.uuid4())
         raw_filename = f"{file_id}_raw.png"
         processed_filename = f"{file_id}_processed.png"
         raw_path = f"{OUTPUT_DIR}/{raw_filename}"
         processed_path = f"{OUTPUT_DIR}/{processed_filename}"
-        generate_image(prompt, raw_path)
+        uploaded_path = None
+        if mode == "img2img":
+            if source_image is None:
+                raise Exception("Image required for img2img mode")
+            uploaded_path = f"{OUTPUT_DIR}/{file_id}_input.png"
+            with open(uploaded_path, "wb") as buffer:
+                shutil.copyfileobj(source_image.file, buffer)
+            generate_from_image(
+                uploaded_path,
+                prompt,
+                raw_path,
+                strength
+            )
+        else:
+            generate_image(prompt, raw_path)
         process_image(
             raw_path,
             processed_path,
@@ -134,7 +207,6 @@ def generate(
             color_count=color_count,
             final_size=final_size
         )
-
         return f"""
         <html>
             <body style="text-align:center;font-family:Arial;padding:40px;">
@@ -147,24 +219,19 @@ def generate(
                 <img src="/file/{processed_filename}" width="300"/>
                 <br><br>
                 <a href="/download/{processed_filename}">
-                    <button>
-                        Download Image
-                    </button>
+                    <button>Download Image</button>
                 </a>
                 <br><br>
-                <form action="/generate" method="post">
+                <form action="/generate" method="post" enctype="multipart/form-data">
                     <input type="hidden" name="prompt" value="{prompt}">
                     <input type="hidden" name="stitch_size" value="{stitch_size}">
                     <input type="hidden" name="color_count" value="{color_count}">
                     <input type="hidden" name="final_size" value="{final_size}">
-                    <button type="submit">
-                        Regenerate
-                    </button>
-                </form>
+                    <input type="hidden" name="strength" value="{strength}">
+                    <button type="submit">Regenerate</button>
+                </form
                 <br>
-                <a href="/">
-                    Generate Another
-                </a>
+                <a href="/">Generate Another</a>
             </body>
         </html>
         """
