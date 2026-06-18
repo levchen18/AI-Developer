@@ -24,6 +24,7 @@ POSITIVE_PROMPT = (
     "bold shapes, high contrast, soft yarn texture"
 )
 
+
 def get_pipe():
     global pipe
     if pipe is None:
@@ -32,6 +33,7 @@ def get_pipe():
             torch_dtype=torch.float16 if device == "cuda" else torch.float32
         ).to(device)
     return pipe
+
 
 def get_txt2img_pipe():
     global txt2img_pipe
@@ -56,6 +58,7 @@ def get_img2img_pipe():
         ).to(device)
     return img2img_pipe
 
+
 def generate_image(prompt: str, path: str):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
     negative_prompt = (
@@ -76,11 +79,12 @@ def generate_image(prompt: str, path: str):
         print("IMAGE GENERATION ERROR:", e)
         raise
 
+
 def generate_from_image(
-    input_image_path: str,
-    prompt: str,
-    output_path: str,
-    strength: float = 0.7
+        input_image_path: str,
+        prompt: str,
+        output_path: str,
+        strength: float = 0.4
 ):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
     negative_prompt = (
@@ -94,8 +98,8 @@ def generate_from_image(
             result = get_img2img_pipe()(
                 prompt=full_prompt,
                 image=init_image,
-                strength=strength,
-                guidance_scale=8,
+                strength=float(strength),
+                guidance_scale=7.5,
                 num_inference_steps=30,
                 negative_prompt=negative_prompt
             )
@@ -105,12 +109,13 @@ def generate_from_image(
         print("IMAGE TO IMAGE ERROR:", e)
         raise
 
+
 def process_image(
-    input_path: str,
-    output_path: str,
-    stitch_size: int = 32,
-    color_count: int = 4,
-    final_size: int = 192
+        input_path: str,
+        output_path: str,
+        stitch_size: int = 32,
+        color_count: int = 4,
+        final_size: int = 192
 ):
     img = Image.open(input_path)
     img = img.resize((stitch_size, stitch_size), Image.NEAREST)
@@ -119,16 +124,35 @@ def process_image(
     img = img.resize((final_size, final_size), Image.NEAREST)
     img.save(output_path)
 
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
     <html>
+        <head>
+            <script>
+                function toggleModeFields() {
+                    var mode = document.getElementById("modeSelect").value;
+                    var img2imgFields = document.getElementsByClassName("img2img-only");
+
+                    for (var i = 0; i < img2imgFields.length; i++) {
+                        if (mode === "img2img") {
+                            img2imgFields[i].style.display = "block";
+                        } else {
+                            img2imgFields[i].style.display = "none";
+                        }
+                    }
+                }
+                // Run on initial load to ensure the UI matches default select option
+                window.onload = toggleModeFields;
+            </script>
+        </head>
         <body style="text-align:center;font-family:Arial;padding:40px;">
             <h2>Knitting Image Generator</h2>
             <form action="/generate" method="post" enctype="multipart/form-data">
                 <label>Mode</label>
                 <br>
-                <select name="mode">
+                <select name="mode" id="modeSelect" onchange="toggleModeFields()">
                     <option value="txt2img">Text → Image</option>
                     <option value="img2img">Image → Image</option>
                 </select>
@@ -139,18 +163,24 @@ def home():
                     placeholder="Enter prompt"
                 />
                 <br><br>
-                <label>Upload Image (only for img2img)</label>
-                <br>
-                <input type="file" name="source_image">
-                <br><br>
+
+                <div class="img2img-only" style="display:none;">
+                    <label>Upload Image (only for img2img)</label>
+                    <br>
+                    <input type="file" name="source_image">
+                    <br><br>
+                </div>
+
                 <label>Stitch Resolution</label>
                 <br>
                 <input type="range" min="16" max="64" value="32" name="stitch_size"/>
                 <br><br>
+
                 <label>Color Count</label>
                 <br>
                 <input type="range" min="2" max="8" value="4" name="color_count"/>
                 <br><br>
+
                 <label>Output Size</label>
                 <br>
                 <select name="final_size">
@@ -159,25 +189,30 @@ def home():
                     <option value="256">256px</option>
                 </select>
                 <br><br>
-                <label>Strength (img2img only)</label>
-                <br>
-                <input type="range" min="0.1" max="1.0" step="0.1" value="0.7" name="strength"/>
-                <br><br>
+
+                <div class="img2img-only" style="display:none;">
+                    <label>Strength (img2img only)</label>
+                    <br>
+                    <input type="range" min="0.1" max="1.0" step="0.1" value="0.4" name="strength"/>
+                    <br><br>
+                </div>
+
                 <button type="submit">Generate</button>
             </form>
         </body>
     </html>
     """
 
+
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
-    prompt: str = Form(...),
-    mode: str = Form("txt2img"),
-    source_image: UploadFile = File(None),
-    stitch_size: int = Form(32),
-    color_count: int = Form(4),
-    final_size: int = Form(192),
-    strength: float = Form(0.7)
+        prompt: str = Form(...),
+        mode: str = Form("txt2img"),
+        source_image: UploadFile = File(None),
+        stitch_size: int = Form(32),
+        color_count: int = Form(4),
+        final_size: int = Form(192),
+        strength: float = Form(0.4)
 ):
     try:
         file_id = str(uuid.uuid4())
@@ -187,7 +222,7 @@ async def generate(
         processed_path = f"{OUTPUT_DIR}/{processed_filename}"
         uploaded_path = None
         if mode == "img2img":
-            if source_image is None:
+            if source_image is None or source_image.filename == "":
                 raise Exception("Image required for img2img mode")
             uploaded_path = f"{OUTPUT_DIR}/{file_id}_input.png"
             with open(uploaded_path, "wb") as buffer:
@@ -224,12 +259,13 @@ async def generate(
                 <br><br>
                 <form action="/generate" method="post" enctype="multipart/form-data">
                     <input type="hidden" name="prompt" value="{prompt}">
+                    <input type="hidden" name="mode" value="{mode}">
                     <input type="hidden" name="stitch_size" value="{stitch_size}">
                     <input type="hidden" name="color_count" value="{color_count}">
                     <input type="hidden" name="final_size" value="{final_size}">
                     <input type="hidden" name="strength" value="{strength}">
                     <button type="submit">Regenerate</button>
-                </form
+                </form>
                 <br>
                 <a href="/">Generate Another</a>
             </body>
@@ -250,9 +286,11 @@ async def generate(
         </html>
         """
 
+
 @app.get("/file/{filename}")
 def get_file(filename: str):
     return FileResponse(f"{OUTPUT_DIR}/{filename}")
+
 
 @app.get("/download/{filename}")
 def download_file(filename: str):
