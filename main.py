@@ -2,7 +2,7 @@ import shutil
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
-from PIL import Image
+from PIL import Image, ImageEnhance
 import uuid
 import os
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
@@ -19,9 +19,13 @@ txt2img_pipe = None
 img2img_pipe = None
 
 POSITIVE_PROMPT = (
-    "pixel art, knitting pattern, intarsia knitting, "
-    "clean color separation, low detail, centered composition, "
-    "bold shapes, high contrast, soft yarn texture"
+    "pixel art style, low resolution photograph, slightly blurred image, soft focus, "
+    "simple centered composition, single subject, natural lighting, "
+    "realistic style, candid photo, subtle film grain, "
+    "slightly compressed digital image, mild jpeg artifacts, "
+    "minimal background detail, plain or softly blurred background, "
+    "clean composition, shallow depth of field, "
+    "natural colors, realistic textures"
 )
 
 
@@ -61,15 +65,19 @@ def get_img2img_pipe():
 
 def generate_image(prompt: str, path: str):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
-    negative_prompt = (
-        "photorealistic, blurry, text, watermark, "
-        "high detail, realistic shading, noisy background"
+    NEGATIVE_PROMPT = (
+        "grid, graph paper, blueprint, sketchbook, notebook, ruler lines, "
+        "texture background, pattern background, noisy background, "
+        "gradient, shading, lighting, shadow, "
+        "realistic, 3d, photo, render, "
+        "text, watermark, logo, "
+        "complex background, scenery, multiple objects"
     )
     try:
         with torch.inference_mode():
             result = get_txt2img_pipe()(
                 prompt=full_prompt,
-                negative_prompt=negative_prompt,
+                negative_prompt= NEGATIVE_PROMPT,
                 guidance_scale=8,
                 num_inference_steps=30
             )
@@ -87,9 +95,13 @@ def generate_from_image(
         strength: float = 0.4
 ):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
-    negative_prompt = (
-        "photorealistic, blurry, text, watermark, "
-        "high detail, realistic shading, noisy background"
+    NEGATIVE_PROMPT = (
+        "grid, graph paper, blueprint, sketchbook, notebook, ruler lines, "
+        "texture background, pattern background, noisy background, "
+        "gradient, shading, lighting, shadow, "
+        "realistic, 3d, photo, render, "
+        "text, watermark, logo, "
+        "complex background, scenery, multiple objects"
     )
     try:
         init_image = Image.open(input_image_path).convert("RGB")
@@ -101,7 +113,7 @@ def generate_from_image(
                 strength=float(strength),
                 guidance_scale=7.5,
                 num_inference_steps=30,
-                negative_prompt=negative_prompt
+                negative_prompt=NEGATIVE_PROMPT
             )
             image = result.images[0]
         image.save(output_path)
@@ -110,15 +122,13 @@ def generate_from_image(
         raise
 
 
-def process_image(
-        input_path: str,
-        output_path: str,
-        stitch_size: int = 32,
-        color_count: int = 4,
-        final_size: int = 192
-):
-    img = Image.open(input_path)
-    img = img.resize((stitch_size, stitch_size), Image.NEAREST)
+def process_image(input_path, output_path, stitch_size=32, color_count=4, final_size=192):
+    img = Image.open(input_path).convert("RGB")
+    img = ImageEnhance.Contrast(img).enhance(1.4)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    img = ImageEnhance.Color(img).enhance(1.3)
+
+    img = img.resize((stitch_size, stitch_size), Image.LANCZOS)
     img = img.convert("P", palette=Image.ADAPTIVE, colors=color_count)
     img = img.convert("RGB")
     img = img.resize((final_size, final_size), Image.NEAREST)
@@ -134,7 +144,6 @@ def home():
                 function toggleModeFields() {
                     var mode = document.getElementById("modeSelect").value;
                     var img2imgFields = document.getElementsByClassName("img2img-only");
-
                     for (var i = 0; i < img2imgFields.length; i++) {
                         if (mode === "img2img") {
                             img2imgFields[i].style.display = "block";
@@ -143,7 +152,6 @@ def home():
                         }
                     }
                 }
-                // Run on initial load to ensure the UI matches default select option
                 window.onload = toggleModeFields;
             </script>
         </head>
@@ -163,24 +171,28 @@ def home():
                     placeholder="Enter prompt"
                 />
                 <br><br>
-
                 <div class="img2img-only" style="display:none;">
                     <label>Upload Image (only for img2img)</label>
                     <br>
                     <input type="file" name="source_image">
                     <br><br>
                 </div>
-
                 <label>Stitch Resolution</label>
                 <br>
-                <input type="range" min="16" max="64" value="32" name="stitch_size"/>
-                <br><br>
-
+                <div style="display: flex; justify-content: center; align-items: center; gap: 10px;">
+                    <input type="range" min="16" max="64" value="32" name="stitch_size" id="stitchRange"
+                           oninput="document.getElementById('stitchVal').innerText = this.value"/>
+                    <span id="stitchVal" style="font-weight:bold; width: 20px; text-align: left;">32</span>
+                </div>
+                <br>
                 <label>Color Count</label>
                 <br>
-                <input type="range" min="2" max="8" value="4" name="color_count"/>
-                <br><br>
-
+                <div style="display: flex; justify-content: center; align-items: center; gap: 10px;">
+                    <input type="range" min="2" max="8" value="4" name="color_count" id="colorRange"
+                           oninput="document.getElementById('colorVal').innerText = this.value"/>
+                    <span id="colorVal" style="font-weight:bold; width: 20px; text-align: left;">4</span>
+                </div>
+                <br>
                 <label>Output Size</label>
                 <br>
                 <select name="final_size">
@@ -189,12 +201,15 @@ def home():
                     <option value="256">256px</option>
                 </select>
                 <br><br>
-
                 <div class="img2img-only" style="display:none;">
                     <label>Strength (img2img only)</label>
                     <br>
-                    <input type="range" min="0.1" max="1.0" step="0.1" value="0.4" name="strength"/>
-                    <br><br>
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 10px;">
+                        <input type="range" min="0.1" max="1.0" step="0.1" value="0.4" name="strength" id="strengthRange"
+                               oninput="document.getElementById('strengthVal').innerText = this.value"/>
+                        <span id="strengthVal" style="font-weight:bold; width: 20px; text-align: left;">0.4</span>
+                    </div>
+                    <br>
                 </div>
 
                 <button type="submit">Generate</button>
@@ -220,7 +235,6 @@ async def generate(
         processed_filename = f"{file_id}_processed.png"
         raw_path = f"{OUTPUT_DIR}/{raw_filename}"
         processed_path = f"{OUTPUT_DIR}/{processed_filename}"
-        uploaded_path = None
         if mode == "img2img":
             if source_image is None or source_image.filename == "":
                 raise Exception("Image required for img2img mode")
