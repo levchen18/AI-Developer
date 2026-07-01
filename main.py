@@ -1,15 +1,18 @@
+# Used to copy uploaded image files to the server.
 import shutil
-
+# FastAPI framework and components for handling web requests, forms, file uploads, and responses.
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
+# Pillow library for image editing and enhancement.
 from PIL import Image, ImageEnhance
 import uuid
 import os
+# Stable Diffusion pipelines for text-to-image and image-to-image generation.
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+# PyTorch is used to run the AI models on either CPU or GPU.
 import torch
 
 app = FastAPI()
-
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -18,6 +21,8 @@ pipe = None
 txt2img_pipe = None
 img2img_pipe = None
 
+#All the positive prompts that will be used during image generation.
+#Whenever a user adds a prompt/image for text-image or image-image the positive prompts are automatically added.
 POSITIVE_PROMPT = (
     "pixel art style, low resolution photograph, slightly blurred image, soft focus, "
     "simple centered composition, single subject, natural lighting, "
@@ -28,7 +33,9 @@ POSITIVE_PROMPT = (
     "natural colors, realistic textures"
 )
 
-
+#Loads the Stable Diffusion pipeline only once.
+#If the model has not been loaded yet, it is downloaded into memory and moved to the available device (GPU or CPU).
+#Returns the StableDiffusionPipeline as it loads Stable Diffusion model.
 def get_pipe():
     global pipe
     if pipe is None:
@@ -38,7 +45,9 @@ def get_pipe():
         ).to(device)
     return pipe
 
-
+#Loads the Stable Diffusion pipeline only once.
+#If the model has not been loaded yet, it is downloaded into memory and moved to the available device (GPU or CPU).
+#Returns the StableDiffusionPipeline as it loads Stable Diffusion model in charge of the text to image pipeline for image to image generation.
 def get_txt2img_pipe():
     global txt2img_pipe
     if txt2img_pipe is None:
@@ -50,7 +59,9 @@ def get_txt2img_pipe():
         ).to(device)
     return txt2img_pipe
 
-
+#Loads the Stable Diffusion pipeline only once.
+#If the model has not been loaded yet, it is downloaded into memory and moved to the available device (GPU or CPU).
+#Returns the StableDiffusionPipeline as it loads Stable Diffusion model in charge of the img2img pipeline for image to image generation.
 def get_img2img_pipe():
     global img2img_pipe
     if img2img_pipe is None:
@@ -62,7 +73,10 @@ def get_img2img_pipe():
         ).to(device)
     return img2img_pipe
 
-
+#This will take in the positive prompts and automatically add it to the prompt that user enters.
+#For example, if the prompt is dog it will go through the system with pixel art style dog.
+#The text to image generation will generate an image using the text to image pipeline, creating an image based on prompt and the positive prompts.
+#If invalid images are generated or commands, an error will be displayed to warn the users.
 def generate_image(prompt: str, path: str):
     full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
     NEGATIVE_PROMPT = (
@@ -87,7 +101,11 @@ def generate_image(prompt: str, path: str):
         print("IMAGE GENERATION ERROR:", e)
         raise
 
-
+#This will take in the positive prompts and automatically add it to the prompt that user enters.
+#The negative prompts tells the generation model what to avoid, as we are looking for knitting appropriate images
+#The image to image generation will generate an image using the image to image pipeline, creating an image based on user inputted image and prompt.
+#This function will guide the system through the image to image generation process, as the stable diffusion generate a new image that was just inputted.
+#If invalid images are generated or commands, an error will be displayed to warn the users.
 def generate_from_image(
         input_image_path: str,
         prompt: str,
@@ -121,7 +139,10 @@ def generate_from_image(
         print("IMAGE TO IMAGE ERROR:", e)
         raise
 
-
+#This is the knitted pattern image that can be used for knitting machines after meeting all the knitting and user requirements.
+#The processed image will go through steps to make it a knitting perfect image.
+#Makes dark colors darker and bright colors brighter and helps separate colors more clearly.
+#It also enhances edges and details, as it makes shapes easier to distinguish before pixelation.
 def process_image(input_path, output_path, stitch_size=32, color_count=4, final_size=192):
     img = Image.open(input_path).convert("RGB")
     img = ImageEnhance.Contrast(img).enhance(1.4)
@@ -134,7 +155,11 @@ def process_image(input_path, output_path, stitch_size=32, color_count=4, final_
     img = img.resize((final_size, final_size), Image.NEAREST)
     img.save(output_path)
 
-
+#The home function acts as a shell for the web page. It contains options and layout for text to image and image to image generations.
+#It checks the mode and displays the appropriate functionality based on the generation (insert image/strength for img2img, but not for text to image)
+#A sliding mechanism is inputted allowing users to freely change the number of colors, pixels, and size.
+#Users can use the generate button on the bottom to start the generating process, which allows the users to begin using the stable diffusion.
+#Numbers are visible when making changes and sliding the bar, ensuring that users know the exact amount of changes.
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
@@ -211,7 +236,6 @@ def home():
                     </div>
                     <br>
                 </div>
-
                 <button type="submit">Generate</button>
             </form>
         </body>
@@ -285,7 +309,6 @@ async def generate(
             </body>
         </html>
         """
-
     except Exception as e:
         import traceback
         print(traceback.format_exc())
@@ -300,12 +323,16 @@ async def generate(
         </html>
         """
 
-
+#Serves an image file stored in the output directory.
+#This is endpoint allows generated images to be displayed inside the web page.
+#Returns the FileResponse, which is the requested image
 @app.get("/file/{filename}")
 def get_file(filename: str):
     return FileResponse(f"{OUTPUT_DIR}/{filename}")
 
-
+#Allows users to download a generated knitting pattern.
+#The image is returned as a PNG file attachment so the browser downloads it instead of displaying it.
+#Returns fileResponse which is a downloadable PNG image.
 @app.get("/download/{filename}")
 def download_file(filename: str):
     path = f"{OUTPUT_DIR}/{filename}"
